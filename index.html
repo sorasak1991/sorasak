@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ปรับการยิง ป.และ ค. BY น้าอ้วน</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide-react@latest/dist/umd/lucide-react.js"></script>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script type="text/babel">
+  import React, { useState, useEffect } from 'react';
+  import { Plus, Target, MapPin, Crosshair, Calculator, Trash2, Eye } from 'lucide-react';
+
+// Function to calculate distance between two points (Haversine formula)
+const calculateDistance = (lat1, lon1, lat2, lon2) => {
+  const R = 6371000; // Earth's radius in meters
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return Math.round(R * c);
+};
+
+// Function to calculate bearing between two points (returns in NATO mils)
+const calculateBearing = (lat1, lon1, lat2, lon2) => {
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const lat1Rad = lat1 * Math.PI / 180;
+  const lat2Rad = lat2 * Math.PI / 180;
+  
+  const y = Math.sin(dLon) * Math.cos(lat2Rad);
+  const x = Math.cos(lat1Rad) * Math.sin(lat2Rad) - 
+    Math.sin(lat1Rad) * Math.cos(lat2Rad) * Math.cos(dLon);
+  
+  let bearing = Math.atan2(y, x) * 180 / Math.PI;
+  bearing = (bearing + 360) % 360;
+  
+  // Convert degrees to NATO mils (6400 mils = 360 degrees)
+  return Math.round(bearing * 6400 / 360);
+};
+
+const ArtilleryApp = () => {
+  const [observerPoint, setObserverPoint] = useState({ lat: '', lon: '' });
+  const [targetPoint, setTargetPoint] = useState({ lat: '', lon: '' });
+  const [rounds, setRounds] = useState([{ id: 1, lat: '', lon: '' }]);
+  const [calculations, setCalculations] = useState(null);
+
+  const resetAll = () => {
+    setObserverPoint({ lat: '', lon: '' });
+    setTargetPoint({ lat: '', lon: '' });
+    setRounds([{ id: 1, lat: '', lon: '' }]);
+    setCalculations(null);
+  };
+
+  const addRound = () => {
+    const newRound = { id: rounds.length + 1, lat: '', lon: '' };
+    setRounds([...rounds, newRound]);
+  };
+
+  const removeRound = (id) => {
+    if (rounds.length > 1) {
+      setRounds(rounds.filter(round => round.id !== id));
+    }
+  };
+
+  const updateRound = (id, field, value) => {
+    setRounds(rounds.map(round => 
+      round.id === id ? { ...round, [field]: value } : round
+    ));
+  };
+
+  const calculateAdjustments = () => {
+    if (!observerPoint.lat || !observerPoint.lon || !targetPoint.lat || !targetPoint.lon) {
+      return;
+    }
+
+    const results = [];
+    
+    rounds.forEach(round => {
+      if (round.lat && round.lon) {
+        const obsLat = parseFloat(observerPoint.lat);
+        const obsLon = parseFloat(observerPoint.lon);
+        const targetLat = parseFloat(targetPoint.lat);
+        const targetLon = parseFloat(targetPoint.lon);
+        const roundLat = parseFloat(round.lat);
+        const roundLon = parseFloat(round.lon);
+
+        // Distance and bearing from observer to target
+        const obsToTargetDist = calculateDistance(obsLat, obsLon, targetLat, targetLon);
+        const obsToTargetBearing = calculateBearing(obsLat, obsLon, targetLat, targetLon);
+
+        // Distance and bearing from observer to round
+        const obsToRoundDist = calculateDistance(obsLat, obsLon, roundLat, roundLon);
+        const obsToRoundBearing = calculateBearing(obsLat, obsLon, roundLat, roundLon);
+
+        // Distance and bearing from round to target
+        const roundToTargetDist = calculateDistance(roundLat, roundLon, targetLat, targetLon);
+        const roundToTargetBearing = calculateBearing(roundLat, roundLon, targetLat, targetLon);
+
+        // Calculate adjustments based on observer line of sight to target as reference
+        // 1. Calculate perpendicular distance from round to observer-target line
+        const obsToTargetBearingRad = (obsToTargetBearing * 360 / 6400) * Math.PI / 180; // Convert mils to radians
+        const obsToRoundBearingRad = (obsToRoundBearing * 360 / 6400) * Math.PI / 180; // Convert mils to radians
+        
+        // Calculate the angle difference between observer-target line and observer-round line
+        let angleDiff = obsToRoundBearingRad - obsToTargetBearingRad;
+        if (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
+        if (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+        
+        // Left/Right adjustment: perpendicular distance from round to observer-target line
+        // Positive = Right, Negative = Left (from observer's perspective looking toward target)
+        const leftRightAdjustment = -obsToRoundDist * Math.sin(angleDiff);
+        
+        // Forward/Back adjustment: distance along observer-target line
+        const forwardBackAdjustment = obsToTargetDist - (obsToRoundDist * Math.cos(angleDiff));
+
+        results.push({
+          roundId: round.id,
+          obsToTargetDist,
+          obsToTargetBearing: obsToTargetBearing,
+          obsToRoundDist,
+          obsToRoundBearing: obsToRoundBearing,
+          roundToTargetDist,
+          leftRightAdjustment: Math.round(Math.abs(leftRightAdjustment)),
+          leftRightDirection: leftRightAdjustment > 0 ? 'right' : 'left',
+          forwardBackAdjustment: Math.round(Math.abs(forwardBackAdjustment)),
+          forwardBackDirection: forwardBackAdjustment > 0 ? 'add' : 'drop'
+        });
+      }
+    });
+
+    setCalculations(results);
+  };
+
+  useEffect(() => {
+    calculateAdjustments();
+  }, [observerPoint, targetPoint, rounds]);
+
+  const TriangleVisualization = ({ calc }) => {
+    if (!calc) return null;
+
+    const svgWidth = 320;
+    const svgHeight = 240;
+
+    // Create right triangle - Observer at bottom left, target at top right, round forms right angle
+    const observerX = 50;
+    const observerY = 200;
+    const targetX = 250;
+    const targetY = 50;
+    
+    // Calculate round position to form right triangle
+    // Round should be positioned so that observer-round-target forms a right angle at round
+    const roundX = targetX;
+    const roundY = observerY;
+
+    return (
+      <div className="bg-gradient-to-br from-slate-800 to-slate-900 p-4 rounded-lg">
+        <svg width={svgWidth} height={svgHeight} className="border border-gray-600 rounded">
+          {/* Grid background */}
+          <defs>
+            <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+              <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#374151" strokeWidth="0.5"/>
+            </pattern>
+          </defs>
+          <rect width="100%" height="100%" fill="url(#grid)" />
+
+          {/* Right angle indicator */}
+          <path d={`M ${roundX-15} ${roundY} L ${roundX-15} ${roundY-15} L ${roundX} ${roundY-15}`} 
+                stroke="#ffffff" strokeWidth="1" fill="none" />
+
+          {/* Triangle lines */}
+          <line x1={observerX} y1={observerY} x2={targetX} y2={targetY} 
+                stroke="#ef4444" strokeWidth="3" strokeDasharray="8,4" />
+          <line x1={observerX} y1={observerY} x2={roundX} y2={roundY} 
+                stroke="#22c55e" strokeWidth="2" />
+          <line x1={roundX} y1={roundY} x2={targetX} y2={targetY} 
+                stroke="#f59e0b" strokeWidth="2" />
+
+          {/* Points */}
+          <circle cx={observerX} cy={observerY} r="8" fill="#3b82f6" stroke="#1e40af" strokeWidth="2" />
+          <circle cx={targetX} cy={targetY} r="8" fill="#ef4444" stroke="#dc2626" strokeWidth="2" />
+          <circle cx={roundX} cy={roundY} r="8" fill="#22c55e" stroke="#16a34a" strokeWidth="2" />
+
+          {/* Labels */}
+          <text x={observerX} y={observerY + 25} textAnchor="middle" fill="#3b82f6" fontSize="12" fontWeight="bold">
+            จุดตรวจการณ์
+          </text>
+          <text x={targetX} y={targetY - 15} textAnchor="middle" fill="#ef4444" fontSize="12" fontWeight="bold">
+            เป้าหมาย
+          </text>
+          <text x={roundX} y={roundY - 15} textAnchor="middle" fill="#22c55e" fontSize="12" fontWeight="bold">
+            นัดที่ {calc.roundId}
+          </text>
+
+          {/* Distance and adjustment labels */}
+          <text x={150} y={130} textAnchor="middle" fill="#ef4444" fontSize="11" fontWeight="bold">
+            เส้นตรวจการ {calc.obsToTargetDist}m
+          </text>
+          <text x={150} y={210} textAnchor="middle" fill="#22c55e" fontSize="10">
+            ซ้าย/ขวา: {calc.leftRightAdjustment}m ({calc.leftRightDirection === 'left' ? 'ซ้าย' : 'ขวา'})
+          </text>
+          <text x={275} y={125} textAnchor="middle" fill="#f59e0b" fontSize="10" transform={`rotate(-90 275 125)`}>
+            เพิ่ม/ลด: {calc.forwardBackAdjustment}m ({calc.forwardBackDirection === 'add' ? 'เพิ่ม' : 'ลด'})
+          </text>
+        </svg>
+      </div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 p-4">
+      <div className="max-w-4xl mx-auto">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-red-600 to-orange-600 p-6 rounded-lg shadow-2xl mb-6">
+          <h1 className="text-3xl font-bold text-white text-center flex items-center justify-center gap-3">
+            <Target className="w-8 h-8" />
+            ปรับการยิง ป.และ ค. BY น้าอ้วน
+            <Crosshair className="w-8 h-8" />
+          </h1>
+        </div>
+
+        {/* Input Section */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+          {/* Observer Point */}
+          <div className="bg-gradient-to-br from-blue-800 to-blue-900 p-6 rounded-lg shadow-xl">
+            <div className="flex items-center gap-2 mb-4">
+              <Eye className="w-6 h-6 text-blue-300" />
+              <h2 className="text-xl font-bold text-white">จุดตรวจการณ์</h2>
+            </div>
+            <div className="space-y-3">
+              <input
+                type="number"
+                placeholder="Latitude (deg)"
+                value={observerPoint.lat}
+                onChange={(e) => setObserverPoint({...observerPoint, lat: e.target.value})}
+                className="w-full p-3 bg-slate-800 text-white rounded-lg border border-blue-600 focus:border-blue-400"
+                step="any"
+              />
+              <input
+                type="number"
+                placeholder="Longitude (deg)"
+                value={observerPoint.lon}
+                onChange={(e) => setObserverPoint({...observerPoint, lon: e.target.value})}
+                className="w-full p-3 bg-slate-800 text-white rounded-lg border border-blue-600 focus:border-blue-400"
+                step="any"
+              />
+
+            </div>
+          </div>
+
+          {/* Target Point */}
+          <div className="bg-gradient-to-br from-red-800 to-red-900 p-6 rounded-lg shadow-xl">
+            <div className="flex items-center gap-2 mb-4">
+              <Target className="w-6 h-6 text-red-300" />
+              <h2 className="text-xl font-bold text-white">เป้าหมาย</h2>
+            </div>
+            <div className="space-y-3">
+              <input
+                type="number"
+                placeholder="Latitude (deg)"
+                value={targetPoint.lat}
+                onChange={(e) => setTargetPoint({...targetPoint, lat: e.target.value})}
+                className="w-full p-3 bg-slate-800 text-white rounded-lg border border-red-600 focus:border-red-400"
+                step="any"
+              />
+              <input
+                type="number"
+                placeholder="Longitude (deg)"
+                value={targetPoint.lon}
+                onChange={(e) => setTargetPoint({...targetPoint, lon: e.target.value})}
+                className="w-full p-3 bg-slate-800 text-white rounded-lg border border-red-600 focus:border-red-400"
+                step="any"
+              />
+
+            </div>
+          </div>
+        </div>
+
+        {/* Rounds Section */}
+        <div className="bg-gradient-to-br from-green-800 to-green-900 p-6 rounded-lg shadow-xl mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <MapPin className="w-6 h-6 text-green-300" />
+              <h2 className="text-xl font-bold text-white">นัดยิง</h2>
+            </div>
+            <button
+              onClick={addRound}
+              className="bg-green-600 hover:bg-green-700 text-white p-2 rounded-lg transition-colors flex items-center gap-2"
+            >
+              <Plus className="w-5 h-5" />
+              เพิ่มนัด
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {rounds.map((round) => (
+              <div key={round.id} className="bg-slate-800 p-4 rounded-lg border border-green-600">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-white font-bold">นัดที่ {round.id}</h3>
+                  {rounds.length > 1 && (
+                    <button
+                      onClick={() => removeRound(round.id)}
+                      className="text-red-400 hover:text-red-300 transition-colors"
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </button>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <input
+                    type="number"
+                    placeholder="Latitude (deg)"
+                    value={round.lat}
+                    onChange={(e) => updateRound(round.id, 'lat', e.target.value)}
+                    className="w-full p-2 bg-slate-700 text-white rounded border border-green-600 focus:border-green-400"
+                    step="any"
+                  />
+                  <input
+                    type="number"
+                    placeholder="Longitude (deg)"
+                    value={round.lon}
+                    onChange={(e) => updateRound(round.id, 'lon', e.target.value)}
+                    className="w-full p-2 bg-slate-700 text-white rounded border border-green-600 focus:border-green-400"
+                    step="any"
+                  />
+
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Results Section */}
+        {calculations && calculations.length > 0 && (
+          <div className="bg-gradient-to-br from-purple-800 to-purple-900 p-6 rounded-lg shadow-xl">
+            <div className="flex items-center gap-2 mb-6">
+              <Calculator className="w-6 h-6 text-purple-300" />
+              <h2 className="text-2xl font-bold text-white">ผลการคำนวณ</h2>
+            </div>
+
+            <div className="space-y-6">
+              {calculations.map((calc, index) => (
+                <div key={index} className="bg-slate-800 p-6 rounded-lg border border-purple-600">
+                  <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+                    <MapPin className="w-5 h-5 text-green-400" />
+                    นัดที่ {calc.roundId}
+                  </h3>
+                  
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* Calculations */}
+                    <div className="space-y-4">
+                      <div className="bg-gradient-to-r from-blue-900 to-blue-800 p-4 rounded-lg">
+                        <h4 className="text-blue-300 font-bold mb-2">ข้อมูลพื้นฐาน</h4>
+                        <div className="text-white space-y-1 text-sm">
+                          <p>ระยะจุดตรวจ → เป้าหมาย: <span className="font-bold text-blue-300">{calc.obsToTargetDist}m</span></p>
+                          <p>ทิศจุดตรวจ → เป้าหมาย: <span className="font-bold text-blue-300">{calc.obsToTargetBearing} mils</span></p>
+                          <p>ระยะจุดตรวจ → นัด: <span className="font-bold text-green-300">{calc.obsToRoundDist}m</span></p>
+                          <p>ทิศจุดตรวจ → นัด: <span className="font-bold text-green-300">{calc.obsToRoundBearing} mils</span></p>
+                        </div>
+                      </div>
+
+                      <div className="bg-gradient-to-r from-orange-900 to-orange-800 p-4 rounded-lg">
+                        <h4 className="text-orange-300 font-bold mb-2">การปรับแก้</h4>
+                        <div className="text-white space-y-1">
+                          <p className="text-lg">
+                            ระยะที่ต้องปรับ: 
+                            <span className={`font-bold ml-2 ${calc.forwardBackDirection === 'add' ? 'text-red-400' : 'text-green-400'}`}>
+                              {calc.forwardBackDirection === 'add' ? 'เพิ่ม' : 'ลด'} {calc.forwardBackAdjustment}m
+                            </span>
+                          </p>
+                          <p className="text-lg">
+                            ทิศที่ต้องปรับ: 
+                            <span className={`font-bold ml-2 ${calc.leftRightDirection === 'right' ? 'text-yellow-400' : 'text-blue-400'}`}>
+                              {calc.leftRightDirection === 'right' ? 'ขวา' : 'ซ้าย'} {calc.leftRightAdjustment}m
+                            </span>
+                          </p>
+                          <p className="text-lg">
+                            ระยะจากนัดไปเป้าหมาย: 
+                            <span className="font-bold text-orange-300 ml-2">{calc.roundToTargetDist}m</span>
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="bg-gradient-to-r from-emerald-900 to-emerald-800 p-4 rounded-lg">
+                        <h4 className="text-emerald-300 font-bold mb-2">คำสั่งการปรับแก้</h4>
+                        <div className="text-white font-bold text-lg">
+                          {calc.forwardBackDirection === 'add' ? 'เพิ่มระยะ' : 'ลดระยะ'} {calc.forwardBackAdjustment}m,{' '}
+                          {calc.leftRightDirection === 'right' ? 'ขวา' : 'ซ้าย'} {calc.leftRightAdjustment}m
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Triangle Visualization */}
+                    <TriangleVisualization calc={calc} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Reset Button */}
+        <div className="text-center mt-6">
+          <button
+            onClick={resetAll}
+            className="bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white px-8 py-3 rounded-lg shadow-xl transition-all duration-300 transform hover:scale-105 flex items-center gap-2 mx-auto"
+          >
+            <Trash2 className="w-5 h-5" />
+            รีเซ็ตทั้งหมด
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default ArtilleryApp;
+        ReactDOM.render(<ArtilleryApp />, document.getElementById('root'));
+    </script>
+</body>
+</html>
